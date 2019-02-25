@@ -1,0 +1,512 @@
+}
+agg_list[[1]]
+tic()
+master <- NULL
+for (i in 1:length(datafiles)) {
+agg_list[[i]]$day <- NULL
+master<- as.data.table(rbind(master,agg_list[[i]]))
+}
+master
+toc()
+library(reshape2)
+tic()
+master_wide <- dcast.data.table(master,
+date~parameter, #we want one row for each distinct set of these
+value.var = 'median', #the variable that will be distributed across the id_variables
+fill = 0) # fills NAs with 0
+toc()
+# map parameter code to name in header
+stringNames<- data.table(
+num=c(1,6,7,8,9,10,14,20,30,35,42,44),
+name=c('SO2','CO','NO','NO2','PM2.5','PM10', 'O3', 'TOL', 'BEN', 'EBE', 'TCH', 'NMHC')
+)
+for (col in colnames(master_wide)) {
+index <- which(names(master_wide)==col)
+if(length(stringNames[stringNames$num==col,name])) {
+colnames(master_wide)[index]<-stringNames[stringNames$num==col,name]
+}
+}
+master_wide
+head(weather_raw,3)
+library(lubridate)
+weather_raw$date <- date(as.POSIXct(weather_raw$date))
+master_wide$date <- date(as.POSIXct(master_wide$date))
+tic()
+setkey(weather_raw,date)
+setkey(master_wide,date)
+master_final <- weather_raw[master_wide]
+master_final
+toc()
+str(master_final)
+cols = c('CO','NO','PM10','TOL','BEN','EBE','TCH','NMHC')
+model_data <- master_final[, .SD, .SDcols = !cols]
+model_data
+library(ggplot2)
+library(plotly)
+tic()
+ggplotly(ggplot(data = model_data )+
+geom_boxplot(aes('Min Temp',temp_min), fill='darkseagreen1')+
+geom_boxplot(aes('Avg Temp',temp_avg), fill='slategray1')+
+geom_boxplot(aes('Max Temp',temp_max), fill='coral')+
+labs(title = 'Temperature', y = '°C', x = NULL)+
+coord_flip()+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('Precipitation',precipitation), fill='skyblue3')+
+labs(title = 'Precipitation', y = 'cm', x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('Relative Humidity',humidity), fill='skyblue3')+
+labs(title = 'Relative Humidity', y = '%', x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('Average Wind Speed',wind_avg_speed), fill='aliceblue')+
+labs(title = 'Average Wind Speed', y = "km/h", x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('SO2',SO2), fill='tan2')+
+labs(title = 'SO2', y = 'ug/m3', x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('PM2.5',PM2.5), fill='gray50')+
+labs(title = 'PM2.5', y = 'ug/m3', x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('O3',O3), fill='lightskyblue1')+
+labs(title = 'O3', y = 'ug/m3', x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('NO2',NO2), fill='brown')+
+labs(title = 'NO2', y = 'ug/m3', x = NULL)+
+theme_minimal())
+toc()
+library(GGally)
+tic()
+ggpairs(model_data[, names(model_data)[sapply(model_data, is.numeric)], with=F], title = 'Correlation Analysis for Numeric Variables')
+toc()
+tic()
+library(GGally)
+ggpairs(model_data[, names(model_data)[sapply(model_data, is.numeric)], with=F], title = 'Correlation Analysis for Numeric Variables')
+toc()
+tic()
+library("PerformanceAnalytics")
+chart.Correlation(model_data[, names(model_data)[sapply(model_data, is.numeric)], with=F], histogram=FALSE, pch=19)
+toc()
+tic()
+library("PerformanceAnalytics")
+chart.Correlation(model_data[, names(model_data)[sapply(model_data, is.numeric)], with=F], histogram=FALSE, pch=19)
+toc()
+tic()
+chart.Correlation(model_data[, names(model_data)[sapply(model_data, is.numeric)], with=F], histogram=FALSE, pch=19)
+toc()
+# Average NO2 level in each month
+tic()
+library(ggplot2)
+library(plotly)
+# Monthly averages throughout years
+monthly_average = aggregate(master_wide, by = list(format(as.Date(master_wide$date), "%Y-%m")), FUN = mean)
+plot_ly(data = monthly_average, x = ~date, y = ~NO2, name = 'NO2', type = 'scatter', mode = 'lines', line=list(color="#FC4E07"))%>%
+add_trace(y = ~O3, name = 'O3', mode = 'lines', line = list(color = 'lightblue')) %>%
+add_trace(y = ~SO2, name = 'SO2', mode = 'lines', line=list(color = 'tan2')) %>%
+add_trace(y = ~PM2.5, name = "PM2.5", mode = 'lines', line=list(color = 'grey50'))  %>%
+layout(title = 'Parameter Level Monthly Trend',
+xaxis = list(title = ' ', showgrid = F, zeroline = F),
+yaxis = list(title = 'Parameter Level',showgrid = F, zeroline = F))
+# No2 levels in 2014 (representative year)
+plot_ly(master_wide[year(date) == 2014], x = ~date, y = ~NO2, name = 'NO2', type = 'scatter', mode = 'lines', line=list(color="#FC4E07")) %>%
+add_trace(y = ~O3, name = 'O3', mode = 'lines', line=list(color = 'lightblue')) %>%
+add_trace(y = ~SO2, name = 'SO2', mode = 'lines', line=list(color = 'tan2')) %>%
+add_trace(y = ~PM2.5, name = "PM2.5", mode = 'lines', line=list(color = 'grey50'))  %>%
+layout(title = 'NO2 & O3 Level Monthly Trend in 2014',
+xaxis = list(title = ' ', showgrid = F, zeroline = F),
+yaxis = list(title = 'Parameter Level',showgrid = F, zeroline = F))
+# No2 levels in 2015 (quite untypical year)
+plot_ly(master_wide[year(date) == 2015], x = ~date, y = ~NO2, name = 'NO2', type = 'scatter', mode = 'lines', line=list(color="#FC4E07")) %>%
+add_trace(y = ~O3, name = 'O3', mode = 'lines', line=list(color = 'lightblue')) %>%
+# add_trace(y = ~SO2, name = 'SO2', mode = 'lines', line=list(color = 'lightskyblu2')) %>%
+layout(title = 'NO2 & O3 Level Monthly Trend in 2015',
+xaxis = list(title = ' ', showgrid = F, zeroline = F),
+yaxis = list(title = 'Parameter Level',showgrid = F, zeroline = F))
+toc()
+tic()
+model0 <- lm(NO2~., data=model_data[, !c('date','temp_max','temp_min')])
+summary(model0)
+toc()
+knitr::opts_chunk$set(echo = TRUE, comment = NA, warning = F, message = F)
+options(repos=c(CRAN="Spain"))
+if(!"data.table" %in% installed.packages()) {
+install.packages("data.table")}
+if(!"readxl" %in% installed.packages()) {
+install.packages("readxl")}
+if(!"stringr" %in% installed.packages()) {
+install.packages("stringr")}
+if(!"reshape2" %in% installed.packages()) {
+install.packages("reshape2")}
+if(!"lubridate" %in% installed.packages()) {
+install.packages("lubridate")}
+if(!"ggplot2" %in% installed.packages()) {
+install.packages("ggplot2")}
+if(!"GGally" %in% installed.packages()) {
+install.packages("GGally")}
+if(!"plotly" %in% installed.packages()) {
+install.packages("plotly")}
+if(!"car" %in% installed.packages()) {
+install.packages("car")}
+if(!"Hmisc" %in% installed.packages()) {
+install.packages("Hmisc")}
+if(!"DT" %in% installed.packages()) {
+install.packages("DT")}
+library(data.table)
+wd <- getwd()
+require(tictoc)
+tic()
+# list items from the working directory and store them in an object
+datafiles <- list.files(path=paste0(wd,"/workgroup data/"),
+pattern = '*.csv')
+# extract file names and pass them in lapply (with fread) to read all files and store them as a list object
+file_list <- lapply(paste0(paste0(wd,"/workgroup data/"),datafiles), fread)
+# the object file_list will have as many elements (data.table class) as the number of files (72, in our case)
+# import weather data using read_xlsx from readxl package but store it as data.table for consistency
+library(readxl)
+weather_raw <- as.data.table(read_xlsx(paste0(wd,"/weather.xlsx")))
+toc()
+tic()
+agg_list <- NULL
+for (i in 1:length(file_list)) {
+agg_list[[i]]<-file_list[[i]][,.(median=median(value, na.rm = T)),by=.(day,parameter)]
+}
+toc()
+agg_list[[1]]
+library(stringr)
+for (i in 1:length(datafiles)){
+agg_list[[i]][,date:=as.POSIXct(paste0('20',
+substr(datafiles[[i]],13,14),'-',
+str_extract(substr(datafiles[[i]],16,17), "\\d+"), '-',
+agg_list[[i]]$day),format = "%Y-%m-%d")]
+}
+agg_list[[1]]
+tic()
+master <- NULL
+for (i in 1:length(datafiles)) {
+agg_list[[i]]$day <- NULL
+master<- as.data.table(rbind(master,agg_list[[i]]))
+}
+master
+toc()
+library(reshape2)
+tic()
+master_wide <- dcast.data.table(master,
+date~parameter, #we want one row for each distinct set of these
+value.var = 'median', #the variable that will be distributed across the id_variables
+fill = 0) # fills NAs with 0
+toc()
+# map parameter code to name in header
+stringNames<- data.table(
+num=c(1,6,7,8,9,10,14,20,30,35,42,44),
+name=c('SO2','CO','NO','NO2','PM2.5','PM10', 'O3', 'TOL', 'BEN', 'EBE', 'TCH', 'NMHC')
+)
+for (col in colnames(master_wide)) {
+index <- which(names(master_wide)==col)
+if(length(stringNames[stringNames$num==col,name])) {
+colnames(master_wide)[index]<-stringNames[stringNames$num==col,name]
+}
+}
+master_wide
+head(weather_raw,3)
+library(lubridate)
+weather_raw$date <- date(as.POSIXct(weather_raw$date))
+master_wide$date <- date(as.POSIXct(master_wide$date))
+tic()
+setkey(weather_raw,date)
+setkey(master_wide,date)
+master_final <- weather_raw[master_wide]
+master_final
+toc()
+str(master_final)
+cols = c('CO','NO','PM10','TOL','BEN','EBE','TCH','NMHC')
+model_data <- master_final[, .SD, .SDcols = !cols]
+model_data
+library(ggplot2)
+library(plotly)
+tic()
+ggplotly(ggplot(data = model_data )+
+geom_boxplot(aes('Min Temp',temp_min), fill='darkseagreen1')+
+geom_boxplot(aes('Avg Temp',temp_avg), fill='slategray1')+
+geom_boxplot(aes('Max Temp',temp_max), fill='coral')+
+labs(title = 'Temperature', y = '°C', x = NULL)+
+coord_flip()+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('Precipitation',precipitation), fill='skyblue3')+
+labs(title = 'Precipitation', y = 'cm', x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('Relative Humidity',humidity), fill='skyblue3')+
+labs(title = 'Relative Humidity', y = '%', x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('Average Wind Speed',wind_avg_speed), fill='aliceblue')+
+labs(title = 'Average Wind Speed', y = "km/h", x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('SO2',SO2), fill='tan2')+
+labs(title = 'SO2', y = 'ug/m3', x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('PM2.5',PM2.5), fill='gray50')+
+labs(title = 'PM2.5', y = 'ug/m3', x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('O3',O3), fill='lightskyblue1')+
+labs(title = 'O3', y = 'ug/m3', x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('NO2',NO2), fill='brown')+
+labs(title = 'NO2', y = 'ug/m3', x = NULL)+
+theme_minimal())
+toc()
+library("PerformanceAnalytics")
+chart.Correlation(model_data[, names(model_data)[sapply(model_data, is.numeric)], with=F], histogram=FALSE, pch=19)
+toc()
+# Average NO2 level in each month
+tic()
+library(ggplot2)
+library(plotly)
+# Monthly averages throughout years
+monthly_average = aggregate(master_wide, by = list(format(as.Date(master_wide$date), "%Y-%m")), FUN = mean)
+plot_ly(data = monthly_average, x = ~date, y = ~NO2, name = 'NO2', type = 'scatter', mode = 'lines', line=list(color="#FC4E07"))%>%
+add_trace(y = ~O3, name = 'O3', mode = 'lines', line = list(color = 'lightblue')) %>%
+add_trace(y = ~SO2, name = 'SO2', mode = 'lines', line=list(color = 'tan2')) %>%
+add_trace(y = ~PM2.5, name = "PM2.5", mode = 'lines', line=list(color = 'grey50'))  %>%
+layout(title = 'Parameter Level Monthly Trend',
+xaxis = list(title = ' ', showgrid = F, zeroline = F),
+yaxis = list(title = 'Parameter Level',showgrid = F, zeroline = F))
+# No2 levels in 2014 (representative year)
+plot_ly(master_wide[year(date) == 2014], x = ~date, y = ~NO2, name = 'NO2', type = 'scatter', mode = 'lines', line=list(color="#FC4E07")) %>%
+add_trace(y = ~O3, name = 'O3', mode = 'lines', line=list(color = 'lightblue')) %>%
+add_trace(y = ~SO2, name = 'SO2', mode = 'lines', line=list(color = 'tan2')) %>%
+add_trace(y = ~PM2.5, name = "PM2.5", mode = 'lines', line=list(color = 'grey50'))  %>%
+layout(title = 'NO2 & O3 Level Monthly Trend in 2014',
+xaxis = list(title = ' ', showgrid = F, zeroline = F),
+yaxis = list(title = 'Parameter Level',showgrid = F, zeroline = F))
+# No2 levels in 2015 (quite untypical year)
+plot_ly(master_wide[year(date) == 2015], x = ~date, y = ~NO2, name = 'NO2', type = 'scatter', mode = 'lines', line=list(color="#FC4E07")) %>%
+add_trace(y = ~O3, name = 'O3', mode = 'lines', line=list(color = 'lightblue')) %>%
+# add_trace(y = ~SO2, name = 'SO2', mode = 'lines', line=list(color = 'lightskyblu2')) %>%
+layout(title = 'NO2 & O3 Level Monthly Trend in 2015',
+xaxis = list(title = ' ', showgrid = F, zeroline = F),
+yaxis = list(title = 'Parameter Level',showgrid = F, zeroline = F))
+toc()
+tic()
+model0 <- lm(NO2~., data=model_data[, !c('date','temp_max','temp_min')])
+summary(model0)
+toc()
+# Split data into train and test dataset:
+set.seed = 1
+train <- sample.int(nrow(model_data), size = 0.8*nrow(model_data))
+md_train <- model_data[train,]
+md_test <- model_data[-train,]
+model1 <- lm(NO2~., data=md_train[, !c('date','temp_max','temp_min')])
+summary(model1)
+model2 <- lm(NO2~temp_avg+precipitation+humidity+I(sqrt(wind_avg_speed))+SO2+PM2.5+O3,
+data = md_train)
+summary(model2)
+model3 <- lm(NO2~temp_avg+precipitation+humidity+I(log(wind_avg_speed))+SO2+PM2.5+O3,
+data = md_train)
+summary(model3)
+library(Hmisc)
+model4 <- lm(NO2~temp_avg+precipitation+humidity+wind_avg_speed+SO2+PM2.5+O3+Lag(NO2, shift = 1),
+data = md_train)
+summary(model4)
+# Aggregate by month and year at the very begining
+tic()
+date_list <- NULL
+for (i in 1:length(datafiles)){
+date_list[[i]] <- file_list[[i]]
+date_list[[i]][,date:=as.POSIXct(paste0('20',
+substr(datafiles[[i]],13,14),'-',
+str_extract(substr(datafiles[[i]],16,17), "\\d+"), '-',
+file_list[[i]]$day),format = "%Y-%m-%d")]
+}
+# Aggregate by month and year at the very begining
+tic()
+date_list <- NULL
+for (i in 1:length(datafiles)){
+date_list[[i]] <- file_list[[i]]
+date_list[[i]][,date:=as.POSIXct(paste0('20',
+substr(datafiles[[i]],13,14),'-',
+str_extract(substr(datafiles[[i]],16,17), "\\d+"), '-',
+file_list[[i]]$day),format = "%Y-%m-%d")]
+}
+# Aggregate by month and year at the very begining
+date_list <- NULL
+for (i in 1:length(datafiles)){
+date_list[[i]] <- file_list[[i]]
+date_list[[i]][,date:=as.POSIXct(paste0('20',
+substr(datafiles[[i]],13,14),'-',
+str_extract(substr(datafiles[[i]],16,17), "\\d+"), '-',
+file_list[[i]]$day),format = "%Y-%m-%d")]
+}
+# Aggregate by month and year at the very begining
+tic()
+date_list <- NULL
+for (i in 1:length(datafiles)){
+date_list[[i]] <- file_list[[i]]
+date_list[[i]][,date:=as.POSIXct(paste0('20',
+substr(datafiles[[i]],13,14),'-',
+str_extract(substr(datafiles[[i]],16,17), "\\d+"), '-',
+file_list[[i]]$day),format = "%Y-%m-%d")]
+}
+ggplot(model1) +
+geom_histogram(aes(.resid))
+# QQ-plot
+qqnorm(model1$residuals)
+qqline(model1$residuals)
+# Shapiro Wilk Test
+shapiro.test(model1$residuals)
+library(car)
+spreadLevelPlot(model1) # don't look too constant
+ncvTest(model1)
+RMSEtrain<-sqrt(mean(residuals(model1)**2))
+RMSEtrain
+md_test$pred<-predict(model1,md_test)
+md_test$res<-(md_test$NO2-md_test$pred)
+md_test_cc <- md_test[complete.cases(md_test)]
+RMSEtest<-sqrt(mean(md_test_cc$res**2))
+RMSEtest
+durbinWatsonTest(model1)
+vif(model1)
+knitr::opts_chunk$set(echo = TRUE, comment = NA, warning = F, message = F)
+options(repos=c(CRAN="https://cran.rediris.es/"))
+if(!"data.table" %in% installed.packages()) {
+install.packages("data.table")}
+if(!"readxl" %in% installed.packages()) {
+install.packages("readxl")}
+if(!"stringr" %in% installed.packages()) {
+install.packages("stringr")}
+if(!"reshape2" %in% installed.packages()) {
+install.packages("reshape2")}
+if(!"lubridate" %in% installed.packages()) {
+install.packages("lubridate")}
+if(!"ggplot2" %in% installed.packages()) {
+install.packages("ggplot2")}
+if(!"GGally" %in% installed.packages()) {
+install.packages("GGally")}
+if(!"plotly" %in% installed.packages()) {
+install.packages("plotly")}
+if(!"car" %in% installed.packages()) {
+install.packages("car")}
+if(!"Hmisc" %in% installed.packages()) {
+install.packages("Hmisc")}
+if(!"DT" %in% installed.packages()) {
+install.packages("DT")}
+library(data.table)
+wd <- getwd()
+# list items from the working directory and store them in an object
+datafiles <- list.files(path=paste0(wd,"/workgroup data/"),
+pattern = '*.csv')
+# extract file names and pass them in lapply (with fread) to read all files and store them as a list object
+file_list <- lapply(paste0(paste0(wd,"/workgroup data/"),datafiles), fread)
+# the object file_list will have as many elements (data.table class) as the number of files (72, in our case)
+# import weather data using read_xlsx from readxl package but store it as data.table for consistency
+library(readxl)
+weather_raw <- as.data.table(read_xlsx(paste0(wd,"/weather.xlsx")))
+agg_list <- NULL
+for (i in 1:length(file_list)) {
+agg_list[[i]]<-file_list[[i]][,.(median=median(value, na.rm = T)),by=.(day,parameter)]
+}
+agg_list[[1]]
+library(stringr)
+for (i in 1:length(datafiles)){
+agg_list[[i]][,date:=as.POSIXct(paste0('20',
+substr(datafiles[[i]],13,14),'-',
+str_extract(substr(datafiles[[i]],16,17), "\\d+"), '-',
+agg_list[[i]]$day),format = "%Y-%m-%d")]
+}
+agg_list[[1]]
+master <- NULL
+for (i in 1:length(datafiles)) {
+agg_list[[i]]$day <- NULL
+master<- as.data.table(rbind(master,agg_list[[i]]))
+}
+master
+library(reshape2)
+master_wide <- dcast.data.table(master,
+date~parameter, #we want one row for each distinct set of these
+value.var = 'median', #the variable that will be distributed across the id_variables
+fill = 0) # fills NAs with 0
+# map parameter code to name in header
+stringNames<- data.table(
+num=c(1,6,7,8,9,10,14,20,30,35,42,44),
+name=c('SO2','CO','NO','NO2','PM2.5','PM10', 'O3', 'TOL', 'BEN', 'EBE', 'TCH', 'NMHC')
+)
+for (col in colnames(master_wide)) {
+index <- which(names(master_wide)==col)
+if(length(stringNames[stringNames$num==col,name])) {
+colnames(master_wide)[index]<-stringNames[stringNames$num==col,name]
+}
+}
+master_wide
+head(weather_raw,3)
+library(lubridate)
+weather_raw$date <- date(as.POSIXct(weather_raw$date))
+master_wide$date <- date(as.POSIXct(master_wide$date))
+setkey(weather_raw,date)
+setkey(master_wide,date)
+master_final <- weather_raw[master_wide]
+master_final
+str(master_final)
+cols = c('CO','NO','PM10','TOL','BEN','EBE','TCH','NMHC')
+model_data <- master_final[, .SD, .SDcols = !cols]
+model_data
+library(ggplot2)
+library(plotly)
+ggplotly(ggplot(data = model_data )+
+geom_boxplot(aes('Min Temp',temp_min), fill='darkseagreen1')+
+geom_boxplot(aes('Avg Temp',temp_avg), fill='slategray1')+
+geom_boxplot(aes('Max Temp',temp_max), fill='coral')+
+labs(title = 'Temperature', y = '°C', x = NULL)+
+coord_flip()+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('Precipitation',precipitation), fill='skyblue3')+
+labs(title = 'Precipitation', y = 'cm', x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('Relative Humidity',humidity), fill='skyblue3')+
+labs(title = 'Relative Humidity', y = '%', x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('Average Wind Speed',wind_avg_speed), fill='aliceblue')+
+labs(title = 'Average Wind Speed', y = "km/h", x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('SO2',SO2), fill='tan2')+
+labs(title = 'SO2', y = 'ug/m3', x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('PM2.5',PM2.5), fill='gray50')+
+labs(title = 'PM2.5', y = 'ug/m3', x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('O3',O3), fill='lightskyblue1')+
+labs(title = 'O3', y = 'ug/m3', x = NULL)+
+theme_minimal())
+ggplotly(ggplot(data = model_data)+
+geom_boxplot(aes('NO2',NO2), fill='brown')+
+labs(title = 'NO2', y = 'ug/m3', x = NULL)+
+theme_minimal())
+library(GGally)
+ggpairs(model_data[, names(model_data)[sapply(model_data, is.numeric)], with=F], title = 'Correlation Analysis for Numeric Variables')
+library("PerformanceAnalytics")
+chart.Correlation(model_data[, names(model_data)[sapply(model_data, is.numeric)], with=F],
+histogram=FALSE, pch=19, title = "Correlation Matrix")
+shiny::runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+runApp()
+install.packages('DT')
+runApp('o11_shiny')

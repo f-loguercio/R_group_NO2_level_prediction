@@ -1,0 +1,526 @@
+---
+title: "Air Pollution in Madrid"
+author: "MBD O-1-1"
+output: html_document
+date: "`r format(Sys.time(), '%d-%B-%Y')`"
+---
+
+Setting global options -   
+`echo=T` stands for displaying code along with the result (default) unless specified otherwise.   
+Repository is set to the nearest CRAN mirror location in order to have faster package installations (if and when needed).  
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE, comment = NA, warning = F, message = F)
+options(repos=c(CRAN="https://cran.rediris.es/"))
+```
+
+Installation of packages used in the analysis:  
+```{r packages}
+if(!"data.table" %in% installed.packages()) {
+  install.packages("data.table")} 
+
+if(!"readxl" %in% installed.packages()) {
+  install.packages("readxl")} 
+
+if(!"stringr" %in% installed.packages()) {
+  install.packages("stringr")}
+
+if(!"reshape2" %in% installed.packages()) {
+  install.packages("reshape2")} 
+
+if(!"lubridate" %in% installed.packages()) {
+  install.packages("lubridate")} 
+
+if(!"ggplot2" %in% installed.packages()) {
+  install.packages("ggplot2")} 
+
+if(!"GGally" %in% installed.packages()) {
+  install.packages("GGally")} 
+
+if(!"plotly" %in% installed.packages()) {
+  install.packages("plotly")} 
+
+if(!"car" %in% installed.packages()) {
+  install.packages("car")} 
+
+if(!"PerformanceAnalytics" %in% installed.packages()) {
+  install.packages("PerformanceAnalytics")} 
+
+if(!"Hmisc" %in% installed.packages()) {
+  install.packages("Hmisc")} 
+
+if(!"DT" %in% installed.packages()) {
+  install.packages("DT")} 
+
+```
+
+###About the data
+The data consists of multiple csv files. Hourly pollution data of Madrid city for 6 years (2011 to 2016) is stored in a folder. (72 csv files in one folder)  
+Additionally, weather.xlsx contains daily time series for minimum, average, and maximum temperature, precipitations, humidity and wind in Madrid. 
+
+###Task One  - Data Import  
+Automatically extracting all 72 files from the folder and importing them in the active workspace, along with the weather Excel file.   
+
+```{r readfiles}
+library(data.table)
+wd <- getwd()
+
+# list items from the working directory and store them in an object 
+datafiles <- list.files(path=paste0(wd,"/workgroup data/"), 
+                        pattern = '*.csv')
+
+# extract file names and pass them in lapply (with fread) to read all files and store them as a list object
+file_list <- lapply(paste0(paste0(wd,"/workgroup data/"),datafiles), fread)
+# the object file_list will have as many elements (data.table class) as the number of files (72, in our case) 
+
+# import weather data using read_xlsx from readxl package but store it as data.table for consistency
+library(readxl)
+weather_raw <- as.data.table(read_xlsx(paste0(wd,"/weather.xlsx")))
+```
+
+With this, all the raw data files are loaded in the active workspace.
+
+###Task Two  - Data Preparation  
+
+1. Aggregation  
+Firstly, hourly data in each of the 72 files needs to be aggregated to daily level since the model is going to be run on daily parameters. A look at the hourly data for different parameters shows that it is skewed. Hence, median is chosen as the measure aggregation. The data is grouped by day and parameters.   
+
+#### Dealing with Stations  
+Each file contains data for 24 monitoring stations spread across Madrid. Our initial approach was to consider station as one of the explanatory variables in the regression model, effect of different locations on NO2 levels is an important criteria to study. However, upon further inspection, we realised that inclduing 24 levels (and thereby 23 dummy variables) in a regression model is inefficient. There could be two main approaches to handling multi-levelled categorical variables:   
+A. Reduce levels by merging categories with fewer records.  
+B. Apply Weight of Evidence and Information Value technique and convert categorical to continuous variables.   
+Records in our dataset are spread fairly evenly across all 24 stations and therefore option A was discarded. Option B, on the other hand, was also discarded as the statistical methodology is beyond the scope of this particular assignment. We decided to completely disregard station in our modeling process but we acknowledge that this decision will reduce the correctness of our model.  
+
+Upon grouping by day and parameters, each file now has a unique row for each combination of day and parameter. 
+```{r aggregation}
+agg_list <- NULL
+for (i in 1:length(file_list)) {
+  agg_list[[i]]<-file_list[[i]][,.(median=median(value, na.rm = T)),by=.(day,parameter)]
+}
+```
+This object is also a list with 72 elements.
+
+```{r aggregation_head}
+agg_list[[1]]
+```
+
+2. New Variable - Dates  
+Next step is to change variable day to complete dates. This will ensure upon appending all 72 files into a single masterfile for modeling, each row will be unique.  
+Dates are extracted from the original csv file names. (The program depends on the assumption that file naming convention will remain constant; every new file will be named as "hourly_data_< month >_< day >")  
+As the month in the file name sometimes is one character (jan-sept) and sometimes two, package *`stringr`* is used which can detect one or more numbers in string (in this case applied to the substring that will contain the one or two digit month).   
+
+```{r dates}
+library(stringr)
+
+for (i in 1:length(datafiles)){
+  agg_list[[i]][,date:=as.POSIXct(paste0('20',
+                                         substr(datafiles[[i]],13,14),'-',
+                                         str_extract(substr(datafiles[[i]],16,17), "\\d+"), '-',
+                                         agg_list[[i]]$day),format = "%Y-%m-%d")]
+  
+  }
+
+agg_list[[1]]
+
+```
+
+3. Append List Elements Into a Single File  
+Next, we append all 72 elements into a single data file. This is the first stage of creation of a master data file for modeling. 
+
+```{r rbind}
+master <- NULL
+for (i in 1:length(datafiles)) {
+  agg_list[[i]]$day <- NULL
+  master<- as.data.table(rbind(master,agg_list[[i]]))
+  }
+
+master
+```
+
+4. Conversion from Long to Wide Format  
+Parameters are going to be the explanatory variables in the regression model. Thus, they need to be stored as seperate columns instead of the current structure. This will ensure there is a single unique column for every date. Package *`reshape2`* is used to convert data from long to wide format i.e. dcast.   
+
+```{r dcast}
+library(reshape2)
+
+master_wide <- dcast.data.table(master,
+                                date~parameter, #we want one row for each distinct set of these
+                                value.var = 'median', #the variable that will be distributed across the id_variables
+                                fill = 0) # fills NAs with 0
+
+```
+
+Additionally, we also recode parameters from numbers to names at this stage in order to make further tasks easier.   
+
+```{r rename}
+# map parameter code to name in header
+
+stringNames<- data.table(
+  num=c(1,6,7,8,9,10,14,20,30,35,42,44),
+  name=c('SO2','CO','NO','NO2','PM2.5','PM10', 'O3', 'TOL', 'BEN', 'EBE', 'TCH', 'NMHC')
+)
+for (col in colnames(master_wide)) {
+  index <- which(names(master_wide)==col)
+  if(length(stringNames[stringNames$num==col,name])) {
+    colnames(master_wide)[index]<-stringNames[stringNames$num==col,name]
+  }
+}
+
+master_wide
+```
+
+The master_wide data now has 2192 observations, equal to the rows in weather data.   
+
+5. Merging Master File with Weather Data  
+```{r weather_head}
+head(weather_raw,3)
+```
+
+In order to merge master_wide and weather on date, both columns need to be of the same type.   
+
+```{r change_date_type}
+library(lubridate)
+
+weather_raw$date <- date(as.POSIXct(weather_raw$date)) 
+master_wide$date <- date(as.POSIXct(master_wide$date))
+```
+
+We now proceed to merge both files to create the final master data with date as the common column. A Left Join is undertaken with master_wide as X, in order to retain all observations from parameters data and take matching observations from weather data (Y). Since in this particular case, both files have matching records, type of join does not make a difference. 
+
+```{r final_merge}
+setkey(weather_raw,date)
+setkey(master_wide,date)
+master_final <- weather_raw[master_wide]
+
+master_final
+```
+
+###Task Three  - Data Exploration  
+
+Before regression modeling, it is imperative to have a detailed understanding of the data. First step is to check the structure of data with data types and dimension.  
+
+```{r str}
+str(master_final)
+```
+
+All the variables (18, if date is excluded) are numeric. Scope of the analysis outlines that only 3 parameters - SO2, O3 and PM2.5 are to be considered as independent variables. We therefore prepare a new dataset which includes the modeling variables.   
+
+```{r modeling_data}
+cols = c('CO','NO','PM10','TOL','BEN','EBE','TCH','NMHC')
+model_data <- master_final[, .SD, .SDcols = !cols]
+
+model_data
+```
+
+As mentioned earlier, since all the variables are numeric, we first check distribution of each, using boxplot.   
+
+
+```{r boxplots, fig.height=3, fig.width=5, fig.align='center'}
+library(ggplot2)
+library(plotly)
+
+ggplotly(ggplot(data = model_data )+
+      geom_boxplot(aes('Min Temp',temp_min), fill='darkseagreen1')+
+      geom_boxplot(aes('Avg Temp',temp_avg), fill='slategray1')+
+      geom_boxplot(aes('Max Temp',temp_max), fill='coral')+
+      labs(title = 'Temperature', y = '°C', x = NULL)+
+      coord_flip()+
+      theme_minimal())
+
+ggplotly(ggplot(data = model_data)+
+       geom_boxplot(aes('Precipitation',precipitation), fill='skyblue3')+
+      labs(title = 'Precipitation', y = 'cm', x = NULL)+
+      theme_minimal())
+
+ggplotly(ggplot(data = model_data)+
+       geom_boxplot(aes('Relative Humidity',humidity), fill='skyblue3')+
+      labs(title = 'Relative Humidity', y = '%', x = NULL)+
+      theme_minimal())
+
+ggplotly(ggplot(data = model_data)+
+       geom_boxplot(aes('Average Wind Speed',wind_avg_speed), fill='aliceblue')+
+      labs(title = 'Average Wind Speed', y = "km/h", x = NULL)+
+      theme_minimal())
+
+
+ggplotly(ggplot(data = model_data)+
+       geom_boxplot(aes('SO2',SO2), fill='tan2')+
+      labs(title = 'SO2', y = 'ug/m3', x = NULL)+
+      theme_minimal())
+
+ggplotly(ggplot(data = model_data)+
+       geom_boxplot(aes('PM2.5',PM2.5), fill='gray50')+
+      labs(title = 'PM2.5', y = 'ug/m3', x = NULL)+
+      theme_minimal())
+
+ggplotly(ggplot(data = model_data)+
+       geom_boxplot(aes('O3',O3), fill='lightskyblue1')+
+      labs(title = 'O3', y = 'ug/m3', x = NULL)+
+      theme_minimal())
+
+ggplotly(ggplot(data = model_data)+
+       geom_boxplot(aes('NO2',NO2), fill='brown')+
+      labs(title = 'NO2', y = 'ug/m3', x = NULL)+
+      theme_minimal())
+    
+```
+
+#### Precipitation
+There are a lot of zeroes in precipitation data which disturbs the overall distribution of the variable. However, precipitation zero = no rainfall and it's a valid piece of information.   
+
+#### Correlation Matrix 
+
+```{r corrmat1, fig.align='centre', fig.height=7, fig.width=9, echo=F, eval=F}
+library(GGally)
+ggpairs(model_data[, names(model_data)[sapply(model_data, is.numeric)], with=F], title = 'Correlation Analysis for Numeric Variables')
+```
+
+```{r corrmat2, fig.align='centre', fig.height=7, fig.width=9}
+library("PerformanceAnalytics")
+
+chart.Correlation(model_data[, names(model_data)[sapply(model_data, is.numeric)], with=F],
+                  histogram=FALSE, pch=19, title = "Correlation Matrix")
+```
+
+#### Temperature
+Avg, Min and Max temperature are three ways of reporting the same variable.      
+As expected,they are highly positively correlated with each other, in order to avoid obvious multicollinearity, only one of these three need to be included in the model. **We therefore select Average Temperature as the variable of interest and proceed to analysis hereon.**   
+
+
+```{r graphs}
+# Average NO2 level in each month
+
+library(ggplot2)
+library(plotly)
+# Monthly averages throughout years
+monthly_average = aggregate(master_wide, by = list(format(as.Date(master_wide$date), "%Y-%m")), FUN = mean)
+plot_ly(data = monthly_average, x = ~date, y = ~NO2, name = 'NO2', type = 'scatter', mode = 'lines', line=list(color="#FC4E07"))%>%
+    add_trace(y = ~O3, name = 'O3', mode = 'lines', line = list(color = 'lightblue')) %>%
+    add_trace(y = ~SO2, name = 'SO2', mode = 'lines', line=list(color = 'tan2')) %>% 
+    add_trace(y = ~PM2.5, name = "PM2.5", mode = 'lines', line=list(color = 'grey50'))  %>%
+    layout(title = 'Parameter Level Monthly Trend',
+    xaxis = list(title = ' ', showgrid = F, zeroline = F),
+    yaxis = list(title = 'Parameter Level',showgrid = F, zeroline = F))
+
+```
+
+###Task Four  - Modeling  
+
+#### Split dataset into train and test data
+
+```{r splt}
+# Split data into train and test dataset:
+set.seed = 1
+train <- sample.int(nrow(model_data), size = 0.8*nrow(model_data))
+md_train <- model_data[train,]
+md_test <- model_data[-train,]
+```
+
+#### Model 1 - All variables from the original model data:
+```{r lm1}
+model1 <- lm(NO2~., data=md_train[, !c('date','temp_max','temp_min')])
+summary(model1)
+```
+
+#### Model 2 - Including wind_speed as square root:
+```{r lm2}
+model2 <- lm(NO2~temp_avg+precipitation+humidity+I(sqrt(wind_avg_speed))+SO2+PM2.5+O3, 
+             data = md_train)
+summary(model2)
+```
+
+#### Model 3 - Instead including log of wind_speed:
+```{r lm3}
+model3 <- lm(NO2~temp_avg+precipitation+humidity+I(log(wind_avg_speed))+SO2+PM2.5+O3, 
+             data = md_train)
+summary(model3)
+```
+
+#### Model 4 - Including lag of NO2:
+```{r lm4}
+library(Hmisc)
+
+model4 <- lm(NO2~temp_avg+precipitation+humidity+wind_avg_speed+SO2+PM2.5+O3+Lag(NO2, shift = 1), 
+             data = md_train)
+summary(model4)
+```
+
+#### Model 5 - One more model was tried by aggregating data on monthly level instead of daily
+
+```{r newdata, echo=FALSE}
+# Aggregate by month and year at the very begining
+date_list <- NULL
+for (i in 1:length(datafiles)){
+  date_list[[i]] <- file_list[[i]]
+  date_list[[i]][,date:=as.POSIXct(paste0('20',
+                                          substr(datafiles[[i]],13,14),'-',
+                                          str_extract(substr(datafiles[[i]],16,17), "\\d+"), '-',
+                                          file_list[[i]]$day),format = "%Y-%m-%d")]
+}
+
+for (i in 1:length(date_list)) {
+  date_list[[i]]$moyr <- paste(strftime(date_list[[i]]$date, "%m"),strftime(date_list[[i]]$date, "%Y"))
+}
+
+yrmo_agg_list <- NULL
+for (i in 1:length(date_list)){
+  yrmo_agg_list[[i]] <- date_list[[i]][,.(median_yrmo=median(value, na.rm = T)),
+                                       by=.(moyr,parameter)]
+  }
+
+# append data
+master_yrmo <- NULL
+for (i in 1:length(datafiles)) {
+  master_yrmo<- as.data.table(rbind(master_yrmo,yrmo_agg_list[[i]]))
+  }
+
+# dcast
+master_yrmo_wide <- dcast.data.table(master_yrmo,
+                                moyr~parameter, #we want one row for each distinct set of these
+                                value.var = 'median_yrmo', #the variable that will be distributed across the id_variables
+                                fill = 0) # fills NAs with 0
+
+
+names(master_yrmo_wide) <- c('moyr','SO2','CO','NO','NO2','PM2.5','PM10', 
+                             'O3', 'TOL', 'BEN', 'EBE', 'TCH', 'NMHC')
+
+# add moyr to weather data 
+weather_new <- weather_raw
+weather_new$moyr <- paste(strftime(weather_new$date, "%m"),strftime(weather_new$date, "%Y"))
+
+
+setkey(weather_new,moyr)
+setkey(master_yrmo_wide,moyr)
+master_yrmo_wide_final <- weather_new[master_yrmo_wide]
+```
+
+
+```{r lm5}
+model5 <- lm(NO2~temp_avg+precipitation+humidity+wind_avg_speed+SO2+PM2.5+O3, 
+             data=master_yrmo_wide_final)
+summary(model5)
+```
+
+#### Excluding insignificant variabless gradually:
+##### Excluding Precipitation
+```{r lm6}
+model6 <- lm(NO2~temp_avg+humidity+wind_avg_speed+SO2+PM2.5+O3, data=master_yrmo_wide_final)
+summary(model6)
+```
+
+#### Modeling on complete dataset
+
+```{r lm0}
+model0 <- lm(NO2~., data=model_data[, !c('date','temp_max','temp_min')])
+summary(model0)
+```
+
+#### Overview of all models
+```{r ov, echo = F}
+library(DT)
+model_ov <- data.frame(Model = c('Model 0', 'Model 1', 'Model 2', 
+                                 'Model 3', 'Model 4', 'Model 5', 'Model 6'),
+                       Specifications = c("Complete Data", "80% Train Data", 
+                                          "Wind Speed as Sqr Root","Log of Wind Speed", 
+                                          "Lag of NO2", "Aggregating on Monthly Level",
+                                          "Excluding Precipitation"),
+                       R_Squared = round(c(summary(model0)$r.squared, summary(model1)$r.squared,
+                                     summary(model2)$r.squared,summary(model3)$r.squared,
+                                     summary(model4)$r.squared,summary(model5)$r.squared,
+                                     summary(model6)$r.squared),4),
+                       Adjusted_R_Squared = round(c(summary(model0)$adj.r.squared,
+                                              summary(model1)$adj.r.squared,
+                                              summary(model2)$adj.r.squared,
+                                              summary(model3)$adj.r.squared,
+                                              summary(model4)$adj.r.squared,
+                                              summary(model5)$adj.r.squared,
+                                              summary(model6)$adj.r.squared),4)
+                       )
+datatable(model_ov)
+```
+
+
+**Conclusion:** Since all the model versions gave R^2 in similar range and coefficient signs for all models are consistent we choose to go ahead with the simplest one. We proceed with testing assumptions for Model 1 and cross validation in this final section.  
+
+#### 1.) Normality of residuals:
+
+```{r nor}
+ggplot(model1) +
+  geom_histogram(aes(.resid))
+```
+
+Looks fairly normal, but more appropriate analysis of normality is needed.
+
+```{r qq}
+# QQ-plot
+qqnorm(model1$residuals)
+qqline(model1$residuals)
+```
+
+QQ plot shows otherwise. Looks like we have some fatter tails. 
+
+```{r sw}
+# Shapiro Wilk Test
+shapiro.test(model1$residuals)
+```
+Reject H0 (H0: Sample is drawn from random population)
+*Assumption of normality is violated.*  
+
+#### 2.) Homoscedasticity of residuals:
+```{r hm}
+library(car)
+spreadLevelPlot(model1) # don't look too constant
+ncvTest(model1) 
+```
+Reject H0 (H0: Constant error variance)
+*Assumption of homoscedasticity of errors is violated.*
+Potential remedial measures: transformation of dependent variables, use of weighted least squares or White's corrected standard errors.   
+
+#### 3.) Multicollinearity: (variance inflation test)
+```{r mcoll}
+vif(model1) 
+```
+No multicollinearity observed.
+
+#### 4.) No autocorrelation in residuals
+```{r dw}
+durbinWatsonTest(model1) 
+```
+Reject H0 (H0: No autocorrelation amongst errors)
+*Assumption of no autocorrelation is violated.*
+Potential remedial measures: Other methods for fitting a regression model such as Cochrane-Orcutt or Maximum Likelihood Estimation. 
+
+#### Validate model1 on test data
+```{r val}
+
+RMSEtrain<-sqrt(mean(residuals(model1)**2)) 
+RMSEtrain
+
+md_test$pred<-predict(model1,md_test) 
+md_test$res<-(md_test$NO2-md_test$pred)
+md_test_cc <- md_test[complete.cases(md_test)]
+RMSEtest<-sqrt(mean(md_test_cc$res**2))
+RMSEtest
+```
+
+#### Actual vs Predictions
+```{r actpred}
+
+predictions_test <- as.data.table(md_test[, c('date','NO2')])
+predictions_test$NO2_pred <- predict(model1, newdata = md_test)
+write.csv(predictions_test, "predictions_test.csv")
+
+```
+
+```{r predplot, fig.width=9}
+
+plot_ly(data = predictions_test,
+        x = ~date, y =~NO2, name = 'Observed NO2', 
+        type = 'scatter', mode = 'lines+markers') %>%
+  add_trace(y = ~NO2_pred, name = 'Predicted NO2', mode = 'lines+markers') %>%
+  layout(title= "Actual v/s Predicted NO2 Levels (Test Data)")
+
+```
+  
+###**Concluding Remarks**  
+Even though the model performs well on train and test data, since many key assumptions of multiple linear regression modeling are violated, we conclude the modelling process has to be revisited (by taking into consideration some of the remedial measures outlined earlier.)  
+Moreover, since the data is originally recorded at daily time intervals, regression methods for time series should be applied, along with considering station as an independent variable. 
